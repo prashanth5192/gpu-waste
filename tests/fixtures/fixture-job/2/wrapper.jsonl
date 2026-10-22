@@ -1,0 +1,2 @@
+{"ts":1790004650.0,"job":"fixture-job","attempt":2,"rank":null,"node":"gpu-node-1","type":"attempt_start","confidence":"context","source":"wrapper","data":{"argv":["torchrun","--nproc-per-node=8","train.py"],"pid":3001}}
+{"ts":1790015450.0,"job":"fixture-job","attempt":2,"rank":null,"node":"gpu-node-1","type":"child_exit","confidence":"context","source":"wrapper","data":{"exit_code":0,"signal":null,"stderr_tail":[],"oom_kill_delta":0,"duration_s":10800.0}}
