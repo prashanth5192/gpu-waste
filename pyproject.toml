@@ -20,3 +20,7 @@ gpu-waste = "gpu_waste_meter.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["gpu_waste_meter*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
