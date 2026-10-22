@@ -7,6 +7,7 @@ Sections without data say `not measured` rather than guessing.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 from pathlib import Path
 
 from ._store import iter_job_events, root_dir
@@ -58,7 +59,9 @@ def _cell(text: str, limit: int = 80) -> str:
 def _gpu_count(events: list[dict], override: int | None) -> tuple[int | None, str]:
     if override:
         return override, "--gpus"
-    worlds = [e.get("world_size") for e in events if isinstance(e.get("world_size"), int)]
+    worlds = [w for e in events
+              for w in (e.get("world_size"), (e.get("data") or {}).get("world_size"))
+              if isinstance(w, int)]
     if worlds:
         return max(worlds), "world_size"
     ranks = {e.get("rank") for e in events if isinstance(e.get("rank"), int)}
@@ -75,33 +78,94 @@ def _attempts(events: list[dict]) -> list[dict]:
         a = e.get("attempt")
         if not isinstance(a, int):
             continue
-        row = by.setdefault(a, {"attempt": a, "start": None, "end": None, "exit": None})
+        row = by.setdefault(a, {"attempt": a, "start": None, "end": None, "exit": None,
+                                "exc": [], "oom": False, "sigterm": False, "ended": False,
+                                "rank_started": set(), "rank_ended": set()})
         ts = e.get("ts")
-        if e.get("type") == "attempt_start" and isinstance(ts, (int, float)):
+        t = e.get("type")
+        data = e.get("data") or {}
+        rank = e.get("rank") if e.get("source") == "inproc" else None
+        if t == "attempt_start" and isinstance(ts, (int, float)):
             row["start"] = ts if row["start"] is None else min(row["start"], ts)
-        elif e.get("type") == "child_exit":
-            row["exit"] = e.get("data") or {}
+            if isinstance(rank, int):
+                row["rank_started"].add(rank)
+        elif t == "child_exit":
+            row["exit"] = data
             row["end"] = ts
+        elif t == "attempt_end":
+            row["ended"] = True
+            if isinstance(rank, int):
+                row["rank_ended"].add(rank)
+            if row["exit"] is None:
+                row["end"] = ts if row["end"] is None else max(row["end"], ts)
+        elif t == "exception" and data.get("exc_type"):
+            if data["exc_type"] not in row["exc"]:
+                row["exc"].append(data["exc_type"])
+        elif t == "cuda_oom":
+            row["oom"] = True
+        elif t == "sigterm":
+            row["sigterm"] = True
     return [by[k] for k in sorted(by)]
+
+
+def _cause(row: dict) -> str:
+    """In-process evidence explaining a failure, if any.
+
+    A rank that started but never wrote attempt_end died without running any
+    Python cleanup (SIGKILL, kernel OOM killer, segfault). In a multi-rank
+    attempt that is almost always the root cause; other ranks' errors are
+    collateral (peers losing their connection).
+    """
+    if row["oom"]:
+        return "CUDA OOM"
+    vanished = sorted(row["rank_started"] - row["rank_ended"])
+    if vanished and len(vanished) < len(row["rank_started"]):
+        return "rank " + ",".join(map(str, vanished)) + " died without exit (SIGKILL / OOM-killer / crash?)"
+    if row["exc"]:
+        return row["exc"][0].rsplit(".", 1)[-1]
+    if row["sigterm"]:
+        return "SIGTERM"
+    return ""
 
 
 def _outcome(row: dict) -> str:
     ex = row["exit"]
-    if ex is None:
-        return "unknown (no exit recorded)"
+    cause = _cause(row)
+    if ex is None:  # no wrapper: fall back to in-process evidence
+        if cause:
+            return f"failed ({cause})"
+        return "ok (in-process)" if row["ended"] else "unknown (no exit recorded)"
     if ex.get("signal"):
-        return f"failed (signal {ex['signal']})"
-    if ex.get("exit_code") == 0:
+        base = f"failed (signal {ex['signal']})"
+    elif ex.get("exit_code") == 0:
         return "ok"
-    return f"failed (exit {ex.get('exit_code')})"
+    else:
+        base = f"failed (exit {ex.get('exit_code')})"
+    return f"{base} · {cause}" if cause else base
 
 
-def _last_stderr(row: dict) -> str:
+_RANK_PREFIX = re.compile(r"^\[rank\d+\]:\s?")
+_EXC_LINE = re.compile(r"^[\w.]*(Error|Exception|Interrupt)\b")
+_LAUNCHER_NOISE = ("ChildFailedError",)
+
+
+def _key_stderr(row: dict) -> str:
+    """Most informative stderr line: the FIRST real exception line in the tail
+    (in distributed jobs later errors are usually collateral, e.g. peers losing
+    their connection; launcher wrappers like torchrun's ChildFailedError are
+    skipped), else the last non-decoration line."""
     ex = row["exit"] or {}
     if ex.get("error"):
         return ex["error"]
-    tail = [l for l in ex.get("stderr_tail") or [] if l.strip()]
-    return tail[-1] if tail else ""
+    tail = ex.get("stderr_tail") or []
+    for line in tail:
+        body = _RANK_PREFIX.sub("", line.strip())
+        if _EXC_LINE.match(body) and not any(n in body for n in _LAUNCHER_NOISE):
+            return line.strip()
+    for line in reversed(tail):
+        if re.search(r"[A-Za-z0-9]", line):
+            return line.strip()
+    return ""
 
 
 # --------------------------------------------------------------------------- render
@@ -139,7 +203,7 @@ def render(job: str, gpus: int | None = None) -> str:
         failed = sum(1 for r in rows if _outcome(r).startswith("failed"))
         out.append(f"{len(rows)} attempts, {failed} failed.")
         out.append("")
-        out.append("| # | Start | Duration | Outcome | OOM kills | Last stderr line |")
+        out.append("| # | Start | Duration | Outcome | OOM kills | First error (stderr) |")
         out.append("|---|---|---|---|---|---|")
         for r in rows:
             ex = r["exit"] or {}
@@ -149,7 +213,7 @@ def render(job: str, gpus: int | None = None) -> str:
             oom = ex.get("oom_kill_delta")
             out.append("| {} | {} | {} | {} | {} | {} |".format(
                 r["attempt"], _ts(r["start"]), _dur(dur), _outcome(r),
-                "—" if oom is None else oom, _cell(_last_stderr(r)) or "—"))
+                "—" if oom is None else oom, _cell(_key_stderr(r)) or "—"))
     else:
         out.append(NM)
     out.append("")

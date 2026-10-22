@@ -22,7 +22,7 @@ not measured (accounting pending)
 
 3 attempts, 2 failed.
 
-| # | Start | Duration | Outcome | OOM kills | Last stderr line |
+| # | Start | Duration | Outcome | OOM kills | First error (stderr) |
 |---|---|---|---|---|---|
 | 0 | 2026-09-21 14:13:20 UTC | 45m 30s | failed (exit 1) | 0 | torch.distributed.DistBackendError: NCCL error: unhandled system error \| rank 3 |
 | 1 | 2026-09-21 14:59:50 UTC | 30m 00s | failed (signal 9) | 1 | [step 1200] loss=2.31 |
