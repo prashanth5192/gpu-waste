@@ -1,6 +1,7 @@
 """`gpu-waste` command line.
 
     gpu-waste run -- <cmd...>     run a command, record attempt_start / child_exit
+    gpu-waste report              write gpu-waste.md from recorded evidence
 """
 
 from __future__ import annotations
@@ -164,6 +165,20 @@ def cmd_run(argv: list[str]) -> int:
     return 128 + sig if sig else rc
 
 
+# --------------------------------------------------------------------------- report
+
+def cmd_report(args) -> int:
+    from . import report
+
+    job = args.job or report.latest_job()
+    if not job:
+        print(f"gpu-waste: no recorded jobs under {root_dir()}", file=sys.stderr)
+        return 1
+    path = report.write_report(job, args.output, gpus=args.gpus)
+    print(f"gpu-waste: wrote {path} (job {job})")
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 
 def main(argv: list[str] | None = None) -> int:
@@ -173,9 +188,16 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run", help="run a command and record its lifecycle",
                    usage="gpu-waste run -- <command> [args...]")
 
+    rep = sub.add_parser("report", help="write gpu-waste.md from recorded evidence")
+    rep.add_argument("--job", help="job id (default: most recent)")
+    rep.add_argument("-o", "--output", default="gpu-waste.md", help="output path")
+    rep.add_argument("--gpus", type=int, help="GPUs allocated (if not inferable)")
+
     if argv and argv[0] == "run":
         return cmd_run(argv[1:])
-    parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.command == "report":
+        return cmd_report(args)
     parser.print_help()
     return 2
 

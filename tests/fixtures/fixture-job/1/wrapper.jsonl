@@ -1,0 +1,4 @@
+{"ts":1790002790.0,"job":"fixture-job","attempt":1,"rank":null,"node":"gpu-node-1","type":"attempt_start","confidence":"context","source":"wrapper","data":{"argv":["torchrun","--nproc-per-node=8","train.py"],"pid":2001}}
+this line is corrupt and must be skipped
+{"ts":1790004590.0,"job":"fixture-job","attempt":1,"rank":null,"node":"gpu-node-1","type":"child_exit","confidence":"confirmed","source":"wrapper","data":{"exit_code":null,"signal":9,"stderr_tail":["[step 1200] loss=2.31"],"oom_kill_delta":1,"duration_s":1800.0}}
+{"ts":1790004591.0,"job":"fixture-job","attem
