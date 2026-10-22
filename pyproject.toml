@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu_waste_meter"
+version = "0.0.1"
+description = "Local-first accounting of where GPU time is lost in PyTorch training jobs."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = []
+
+[project.optional-dependencies]
+nvml = ["nvidia-ml-py"]
+test = ["pytest"]
+
+[project.scripts]
+gpu-waste = "gpu_waste_meter.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["gpu_waste_meter*"]
